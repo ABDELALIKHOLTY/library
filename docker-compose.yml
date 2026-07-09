@@ -1,0 +1,98 @@
+services:
+
+  mysql:
+    image: mysql:8.0
+    container_name: ensam-mysql
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    ports:
+      - "3307:3306"
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - ensam-net
+    # ✅ FIX : healthcheck sur MySQL pour savoir quand il est vraiment prêt
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: ensam-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "8081:80"
+    depends_on:
+      # ✅ FIX : attendre que MySQL soit healthy, pas juste démarré
+      mysql:
+        condition: service_healthy
+    networks:
+      - ensam-net
+
+  backend:
+    build: backend
+    container_name: backend
+    env_file: .env
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    depends_on:
+      # ✅ FIX : attendre que MySQL soit healthy avant de démarrer Spring Boot
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: ${SPRING_DATASOURCE_URL}
+      SPRING_DATASOURCE_USERNAME: ${SPRING_DATASOURCE_USERNAME}
+      SPRING_DATASOURCE_PASSWORD: ${SPRING_DATASOURCE_PASSWORD}
+      SPRING_JWT_SECRET: ${JWT_SECRET}
+    networks:
+      - ensam-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/swagger-ui/index.html"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      BACKEND_URL: http://backend:8080
+      VITE_API_BASE_URL: ""
+    networks:
+      - ensam-net
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5173', (r) => {if (r.statusCode !== 200) throw new Error(r.statusCode)})"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mysql_data:
+
+networks:
+  ensam-net:
+    driver: bridge
